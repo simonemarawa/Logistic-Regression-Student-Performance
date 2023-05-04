@@ -1,0 +1,459 @@
+---
+title: "Rcode"
+output: word_document
+date: "2023-05-04"
+---
+
+The purpose of this project is to understand how factors like a student’s social, economic, and personal background can influence the student’s final grade in a Portuguese course. Logistic regression will be used to create a model that can predict whether a student will pass or fail based on the most important factors.
+
+
+# Data cleaning 
+
+This dataset has no missing values. 
+
+Since the purpose of this analysis is to predict the final grade, only the G3 variable will be considered for the target variable. Therefore, the G1 and G2 variables will be disregarded from this point. 
+
+To facilitate a logistic regression model, a new variable called grade will be created. It classifies passing (1) as having a G3 grade of 12 or above and failing (0) as having a G3 grade below 12. 
+
+
+
+```{r}
+# import data
+student.por <- read.csv("~/Documents/Langara /Semester 2/Predictive Analytics - Qualitative Data (Qual)/Project/data/student-por.csv", 
+                        sep=";", stringsAsFactors=T)
+attach(student.por)
+summary(student.por)
+head(student.por)
+
+#detach(student.por)
+
+# missing values 
+# number of missing values in data set : 0
+sum(is.na(student.por))
+
+# redefine target variable
+# G3: Pass (1): 12 >= , Fail (0) : <12
+grade =ifelse(G3 >= 12, 1,0 ) #dummy variable
+
+# add new target variable
+student.por$grade = grade
+
+# convert variables to categorical
+
+#convert variables to categorical variable:
+cols <- c("school", "address", "famsize",'Pstatus','Medu','Fedu','Mjob','Fjob',
+          'reason','guardian','traveltime','studytime','failures','schoolsup','famsup',
+          'paid','activities','nursery','higher','internet', 'romantic','famrel','freetime',
+          'goout','Dalc','Walc','health','sex')
+student.por[cols] <- lapply(student.por[cols], factor)
+
+summary(student.por)
+```
+
+
+# Initial variable selection 
+
+The next step is to conduct univariate analyses to identify the variables that have a moderate to high association with the target variable. This will help in creating a smaller subset of variables to use for the logistic regression analysis. To measure the association, different parametric tests will be conducted for different variable types. 
+
+## Numerical Variables
+
+There are only 2 numerical variables present in the data set: Age and Absences. The appropriate test for an association between them and the target variable is a t-test for difference in mean of the two groups in the target variable (pass/fail).
+
+Before a t-test is conducted, the assumption of normally distributed variables needs to be verified. The qq-plots shown below show that the data points deviate from the straight line. This is an indication that neither of the numerical variables are normally distributed. Therefore, instead of using a t-test to measure association, the Kruskal-Wallis non-parametric test will be carried out.
+ 
+The Kruskal-Wallis test  will compare the medians for the two groups in the target variable. For each numerical variable we will test the following hypothesis:
+
+    H0: population medians of the groups within the target variable are equal 
+    Ha: population medians of the groups within the target variable are not equal
+
+ The results (p-values less than 5%) indicate that both variables may influence whether a student pass or fails in Portuguese
+
+```{r}
+# variable selection: Numerical variables
+
+library(ggplot2)
+library(qqplotr)
+
+# qq plot for absences
+ggplot(data = student.por, mapping = aes(sample = absences)) +
+  stat_qq_line(col = 2) +
+  stat_qq_point() +
+  labs(x = "Theoretical Quantiles", y = "Sample Quantiles", title = 'Normal Q-Q Plot for Absences')
+
+
+#qq plot for age
+ggplot(data = student.por, mapping = aes(sample = age)) +
+  stat_qq_line(col = 2) +
+  stat_qq_point() +
+  labs(x = "Theoretical Quantiles", y = "Sample Quantiles", title = 'Normal Q-Q Plot for Age')
+
+# Kruskal-Wallis for numerical variables
+# Absences
+kruskal.test(grade ~ absences, data = student.por)
+
+# Age
+kruskal.test(grade ~ age, data = student.por)
+
+```
+
+
+## Categorical Variables
+
+To test the association between the two groups of the response variable a chi-square test was performed using the following hypothesis
+
+    H0: The two groups within the target variable are independent.
+    Ha: The two groups within the target variable are not independent.
+
+The variables that are to be kept are those that have a p-value less than 0.05 
+
+```{r}
+# variable selection: Categorical variables
+
+#categorical variables
+categorical = student.por[c('grade',"school", "address", "famsize",'Pstatus','Medu','Fedu','Mjob','Fjob',
+                            'reason','guardian','traveltime','studytime','failures','schoolsup','famsup',
+                            'paid','activities','nursery','higher','internet', 'romantic','famrel','freetime',
+                            'goout','Dalc','Walc','health', 'sex')]
+
+#function for chi-squared test on a data frame
+chisqmatrix <- function(x) {
+  names = colnames(x);  num = length(names)
+  m = matrix(nrow=num,ncol=num,dimnames=list(names,names))
+  for (i in 1:(num-1)) {
+    for (j in (i+1):num) {
+      m[i,j] = chisq.test(x[,i],x[,j],correct=FALSE)$p.value
+    }
+  }
+  return (m)
+}
+mat = chisqmatrix(categorical)
+mat[1,]
+
+```
+
+# Multicollinearity
+
+To measure the amount of multicollinearity between the independent variables, an initial logistic model is built and the variance inflation factor (VIF) for each variable is calculated. The result of the VIF is shown below.
+
+A VIF value of 3 or above is a cause for concern, given the output the variables Medu , Fedu, Mjob, Dalc, Walc are highly correlated with other variables. Therefore, these variables are removed from the model.
+
+```{r}
+# multicollinearity
+
+#initial model to check multicollinearity
+library(car)
+
+#data frame with our initial variables only
+df_initial_variables =  student.por[c("school", "address",'Medu','Fedu','Mjob','Fjob',
+                                      'reason','guardian','traveltime','studytime','failures',
+                                      'activities','higher','internet','goout','Dalc','Walc',
+                                      'health', 'age', 'sex','grade')]
+
+initial_model  = glm (grade~ school+ sex+ Medu+ Fedu+ Mjob+ reason+
+                        address+ Fjob+ guardian+ traveltime+
+                        studytime+failures+activities+ higher+internet+
+                        goout+Dalc+Walc+health+age+absences, family = binomial, data= student.por)
+vif(initial_model)
+```
+
+# Stepwise variable selection
+
+Before moving forward, the dataset is divided into train and test groups using an 80:20 split. Next, a stepwise backward algorithm is used to select the most important variables for a logistic model. The algorithm uses AIC as a criterion for choosing the best subset of variables. 12 variables are shortlisted.
+
+```{r}
+#train and split data
+library(ggplot2)
+library(lattice)
+library(caret)
+#install.packages("scales")
+
+# use a seed to make the same split every time code is run
+set.seed(123)
+#split data 80% vs 20%
+split = 0.80  
+
+trainIndex = createDataPartition(student.por$grade, p=split, list=FALSE)
+
+# Create training and test set
+data_train = student.por[ trainIndex,]
+data_test = student.por[-trainIndex,]
+
+# Check the dimension of both training and test dataset
+dim(data_train)
+dim(data_test)
+
+
+# stepwsie backward selection using AIC
+library(MASS)
+
+# model with our subset of variables (after removing highly correlated variables)
+model_stepwise <- glm(grade ~ school+ sex+reason+ address+ Fjob+
+                    guardian+traveltime+studytime+failures+
+                    activities+higher+internet+goout+health+age+
+                    absences ,family=binomial, data= data_train)
+
+#stepwise backward elimination
+stepAIC(model_stepwise)
+
+```
+
+The next step in the analysis is to verify the significance of the variables that were selected by the stepwise elimination. 
+
+
+To improve the model and reduce overfitting, these insignificant variables will be removed one by one, and the model will be assessed after each removal.
+
+```{r}
+
+# highest p-value elimination 
+
+#check to see if stepwise variables are all significant
+model1 <- glm(grade ~ school + sex + address + guardian + traveltime + 
+                    studytime + failures + activities + higher + internet + health + 
+                    absences ,family=binomial, data= data_train)
+summary(model1)
+
+#new model with health variable removed
+model2 <- glm(grade ~ school + sex + address + guardian + traveltime + 
+                studytime + failures + activities + higher + internet + 
+                absences ,family=binomial, data= data_train)
+summary(model2)
+
+#new model with internet variable removed
+model3 <- glm(grade ~ school + sex + address + guardian + traveltime + 
+                studytime + failures + activities + higher + 
+                absences ,family=binomial, data= data_train)
+summary(model3)
+```
+
+# Possible Interactions
+
+After selecting the most importing main term variables, the next step is to add interactions between said variables. Numerous interaction plots were assessed, and four possible interactions were discovered which are as follows:
+
+
+
+## Activities and Studytime:
+In general, students who don’t have any extra-curricular activities but study less than 2 hours a week, between 2 hours and 5 hours a week or more than 10 hours a week (indicated by studytime 1,2,4) have a lower probability of passing than students who study for the same amount of time but have extra- curricular activities.
+
+However, students that don’t have any extra-curricular activities but study between 5 hours and 10 hours a week  (indicated by studytime 3) have about the same probability of passing as those students who study for the same amount of time but have extracurricular activities.
+
+
+## Sex and Studytime:
+In general, female students that study less than 2 hours a week, between 2 hours and 5 hours a week or more than 10 hours a week (indicated by studytime 1,2,4) have a higher probability of passing than male students who study for the same amount of time.
+
+However, male students have a higher probability of passing when the study time is between 5 hours and 10 hours a week  (indicated by studytime 3) as compared to female students.
+
+
+## School and Guardian:
+When the student’s guardian in either the father or mother then students studying at Gabriel Pereira school (GP) have a higher probability of passing as compared to students with the same guardians but studying at Mousinho da Silveira school (MS). 
+
+However, when the student’s guardian is another individual, the student will have a higher probability of passing if they study at Mousinho da Silveira school (MS).
+
+## Sex and Guardian:
+Female students have a higher probability of passing if their guardian is the father or mother as compared to make students with the father or mother as their guardian.
+
+However, male students have a higher probability of when their guardian is another individual as compared to female students with the same type of guardian.
+
+
+All the possible interactions were added individually to the main term model and upon assessing their significant with the likelihood ratio test none of the interactions came up significant. 
+
+```{r}
+# interactions
+library(interactions)
+
+#study time and sex interaction
+model_studytime_sex =  glm (grade ~ school + sex + address + guardian + traveltime + 
+                              studytime + failures + activities + higher + absences+ 
+                              studytime* sex ,family = binomial, data= data_train)
+
+cat_plot(model_studytime_sex, pred = sex, modx = studytime, data= data_train, geom = 'line', interval = F,
+         main.title = 'Interaction plot between Sex and Study time')
+
+model_school_guardian =  glm (grade~school + sex + address + guardian + traveltime + 
+                              studytime + failures + activities + higher + 
+                              absences
+                            + school* guardian ,family = binomial, data= data_train)
+cat_plot(model_school_guardian, pred = school, modx = guardian, data= data_train, geom = 'line', interval = F,
+         main.title = 'Interaction plot between School and Guardian')
+
+model_sex_guardian =  glm (grade~school + sex + address + guardian + traveltime + 
+                              studytime + failures + activities + higher + 
+                              absences
+                            + sex* guardian ,family = binomial, data= data_train)
+cat_plot(model_sex_guardian, pred = guardian, modx = sex, data= data_train, geom = 'line', interval = F,
+         main.title = 'Interaction plot between Sex and Guardian')
+
+
+model_studytime_activities =  glm (grade~school + sex + address + guardian + traveltime + 
+                              studytime + failures + activities + higher + 
+                              absences
+                            + activities* studytime ,family = binomial, data= data_train)
+cat_plot(model_studytime_activities, pred = activities, modx = studytime, data= data_train, geom = 'line', interval = F,
+         main.title = 'Interaction plot between Activities and Studytime')
+```
+
+
+##Model comparison
+
+To assess two models, a  model comparison test will be done to determine whether the model with an interaction term (Sex and Guardian interaction) is more appropriate than the model without the interaction term. The following likelihood ratio test will be done:
+
+
+    H0 : Reduced model in appropriate (model without interaction)
+    Ha  : Full model is appropriate ( model with interactions school and guardian) 
+
+Decision: p-value = 0.1301 > 0.05 therefore we fail to reject the null hypothesis. 
+Conclusion : At a significance level of 5% we conclude that the model without the interaction is a more appropriate model.
+
+
+```{r}
+# model comparison: interactions 
+# none of the models have a significant interaction 
+
+summary(model_studytime_sex)
+summary(model_school_guardian)
+summary(model_sex_guardian)
+summary(model_studytime_activities)
+```
+
+
+```{r}
+# likelihood ratio test: Model comparison
+#model without interaction
+model = glm(grade~school + sex + address + guardian + traveltime + 
+              studytime + failures + activities + higher + 
+              absences ,family=binomial, data= data_train)
+summary(model)
+
+#model with interaction
+model_sex_guardian =  glm(grade~school + sex + address + guardian + traveltime + 
+                             studytime + failures + activities + higher + 
+                             absences
+                           + sex* guardian ,family = binomial, data= data_train)
+summary(model_sex_guardian)
+
+#likelihood ratio tests 
+library(lmtest)
+lrtest(model, model_studytime_sex) 
+
+lrtest(model, model_school_guardian) 
+
+lrtest(model, model_sex_guardian) 
+
+lrtest(model, model_studytime_activities) 
+```
+
+## Predictive power of the models
+
+
+The statistics from the two models indicate that the model with the interaction performs better when it comes to making predictions. In particular, the model with the interaction has a prediction accuracy of 77% whereas the model without the interaction has a prediction accuracy of 76%. Because this isn’t a huge difference between the models, the extra interaction term doesn’t add much value to the model i.e., the model with less variables (our model) is more appropriate.
+
+The same conclusions can be made using the ROC curve diagram (Figure 8 below). Both models are adequate because neither curve lies on the diagonal line. However, the AUC (area under curve) for the model with the interaction term is 0.12% more than that of the model without the interaction term. Although a higher performing model is better, there isn’t much difference in the performance of both models. Once again, a parsimonious is the better choice.
+
+```{r}
+# predictive power of our model 
+library(caret)
+
+#final model: without interaction
+model = glm(grade~school + sex + address + guardian + traveltime + 
+              studytime + failures + activities + higher + 
+              absences ,family=binomial, data= data_train)
+summary(model)
+
+#sample proportion of 1's for grade variable
+prop =  sum(data_train$grade)/nrow(data_train)
+
+#do prediction using the model
+probabilities = predict(model, newdata = data_test, type = "response") 
+predicted_classes = ifelse(probabilities > prop, 1, 0)
+
+#create a confusion matrix table with all the statistics
+confusionMatrix(table(predicted_classes, data_test$grade), positive = "1")
+
+#  predictive power of model with interaction
+library(caret)
+
+#model with sex and guardian interaction
+model_sex_guardian =  glm(grade~school + sex + address + guardian + traveltime + 
+                            studytime + failures + activities + higher + 
+                            absences
+                          + sex* guardian ,family = binomial, data= data_train)
+
+#sample proportion of 1's for grade variable
+prop =  sum(data_train$grade)/nrow(data_train)
+
+#do prediction using the model
+probabilities = predict(model_sex_guardian, newdata = data_test, type = "response") 
+predicted_classes = ifelse(probabilities > prop, 1, 0)
+
+#create a confusion matrix table with all the statistics
+confusionMatrix(table(predicted_classes, data_test$grade), positive = "1")
+
+# ROC curve 
+library(pROC)
+
+#model with sex and guardian interaction
+model_sex_guardian =  glm(grade~school + sex + address + guardian + traveltime + 
+                            studytime + failures + activities + higher + 
+                            absences
+                          + sex* guardian ,family = binomial, data= data_train)
+
+# our model: no interaction
+model = glm(grade~school + sex + address + guardian + traveltime + 
+              studytime + failures + activities + higher + 
+              absences ,family=binomial, data= data_train)
+
+#roc curve for model without interaction
+rocplot_no_interaction = roc(grade ~ fitted(model), data=data_train)
+
+#roc curve for model with interaction
+rocplot_with_interaction <- roc(grade ~ fitted(model_sex_guardian), data=data_train) 
+
+# Specficity on x axis if legacy.axes=F  
+plot.roc(rocplot_no_interaction, legacy.axes=TRUE, col = 'blue', main = 'Two ROC curves')
+plot.roc(rocplot_with_interaction, add=TRUE, col="red")
+legend(0.8,0.2, c("Model with interaction", "Model without interaction"), lty=1, 
+       col = c("red", "blue"), bty="n", inset=c(0,-0.15))
+
+
+# auc = area under ROC curve = concordance index Model3
+#model with no interaction
+auc(rocplot_no_interaction) 
+
+#model with interaction
+auc(rocplot_with_interaction) 
+```
+
+# Hosmer and Lemeshow Test
+
+The final step in the analysis is to evaluate the goodness of fit of our model. To do this the Hosmer am Lemeshow  test will be conducted:
+
+    H0: Reduced model is appropriate (our model)
+    Ha: Saturated model is appropriate
+
+Decision : P-value = 0.9007 > 0.05 therefore we fail to reject the null hypotheses 
+Conclusion: At a significance level of 5% we can conclude that the model fits well to our data. 
+
+```{r}
+# Hosmer-Lemershow Test
+library(ResourceSelection)
+
+#our model :without interactions
+model = glm(grade~school + sex + address + guardian + traveltime + 
+              studytime + failures + activities + higher + 
+              absences ,family=binomial, data= data_train)
+
+hoslem.test(model$y, fitted(model), g = 11)
+```
+
+# Conclusions: 
+
+  - The model has an accuracy of 64% therefore is does an adequate job in predicting which student will pass or         fail
+
+-     Interpreting the coefficient for activities variable: 
+  Regardless of other variables, the odds of a student with extracurricular  activities passing a Portuguese course is 1.95 (e^0.669)times the odds of a student who doesn't have extracurricular activities. 
+  Therefore, students are highly recommended to enroll in an extracurricular activity, and they can improve their time management skills and consequently their outcomes of passing.
+
+- Interpreting the coefficient for absences variable: 
+  Regardless other variables, for every additional absence a student has the odds of passing decrease by 0.08%. 
+  Therefore, students are recommended to attend classes
+
+
